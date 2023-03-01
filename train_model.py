@@ -21,6 +21,11 @@ import torchvision.models as models
 import torch.nn.functional as F 
 import argparse
 
+# Degugger 
+# import smdebug.pytorch as smd
+
+
+
 S3_BUCKET = ""
 
 
@@ -28,6 +33,28 @@ PATH_BINDER = "/"
 
 TRAIN_PATH = "dogImages" +PATH_BINDER +"dogImages" +PATH_BINDER +"train"
 TEST_PATH = "dogImages" +PATH_BINDER +"dogImages" +PATH_BINDER +"test"
+
+def create_meta_dict(path, path_delimiter, folder_names):
+    meta_data_dict = {
+        "image_name": [],
+        "image_paths": [],
+        "class_idx": [],
+        "class_name": [],
+        "idx": []
+    }
+    idx = 0
+
+    for folder in folder_names:
+        tmp = os.listdir(path + path_delimiter + folder)
+        meta_data_dict["image_name"] += tmp
+        meta_data_dict["image_paths"] += [path_delimiter +
+            folder + path_delimiter + name for name in tmp]
+        meta_data_dict["class_idx"] += [
+            int(folder.split(".")[0])] * len(tmp)
+        meta_data_dict["class_name"] += [folder.split(".")[1]] * len(tmp)
+        meta_data_dict["idx"] += [i for i in range(idx, idx + len(tmp), 1)]
+        idx += len(tmp)
+    return meta_data_dict
 
 
 class MyDogCustomImageDataset(Dataset):
@@ -55,7 +82,7 @@ class MyDogCustomImageDataset(Dataset):
             label = self.target_transform(label)
         return image, label
 
-def test(model, test_loader, criterion):
+def test(model, test_loader, criterion, hook):
     '''
     TODO: Complete this function that can take a model and a 
           testing data loader and will get the test accuray/loss of the model
@@ -63,6 +90,7 @@ def test(model, test_loader, criterion):
     '''
     test_loss = 0
     correct = 0
+    hook.set_mode(smd.modes.EVAL)
     with torch.no_grad():
         for data, target in test_loader:
             
@@ -80,12 +108,13 @@ def test(model, test_loader, criterion):
     )
 
 
-def train(model, train_loader, criterion, optimizer, epoch):
+def train(model, train_loader, criterion, optimizer, epoch, hook):
     '''
     TODO: Complete this function that can take a model and
           data loaders for training and will get train the model
           Remember to include any debugging/profiling hooks that you might need
     '''
+    hook.set_mode(smd.modes.TRAIN)
     size = len(train_loader)
     running_loss = 0.0
     running_corrects = 0
@@ -186,25 +215,7 @@ def main(args):
 
     train_class_map = {str(int(folder.split(".")[0])):folder.split(".")[1] for folder in train_class_folder_names}
     test_class_map = {str(int(folder.split(".")[0])):folder.split(".")[1] for folder in test_class_folder_names}
-    def create_meta_dict(path, path_delimiter, folder_names):
-        meta_data_dict = {
-            "image_name":[],
-            "image_paths":[],  
-            "class_idx":[],  
-            "class_name":[],
-            "idx": []  
-        }  
-        idx = 0
 
-        for folder in folder_names:
-            tmp =  os.listdir(path + path_delimiter + folder)
-            meta_data_dict["image_name"] += tmp
-            meta_data_dict["image_paths"] += [ path_delimiter+ folder + path_delimiter + name for name in  tmp]
-            meta_data_dict["class_idx"] += [int(folder.split(".")[0])] * len(tmp)
-            meta_data_dict["class_name"] += [folder.split(".")[1]] * len(tmp)
-            meta_data_dict["idx"] += [i for i in range(idx, idx + len(tmp), 1)]
-            idx += len(tmp) 
-        return meta_data_dict
     
 
     meta_data_dict_train = create_meta_dict(TRAIN_PATH, PATH_BINDER, train_class_folder_names)
@@ -240,14 +251,19 @@ def main(args):
     TODO: Call the train function to start training your model
     Remember that you will need to set up a way to get training data from S3
     '''
+    # 4. Register the SMDebug hook to save output tensors. #
+
+    hook = smd.Hook.create_from_json_file()
+    hook.register_hook(model)
+    
     for epoch in range(epochs):
-        model=train(model, train_dataloader, loss_criterion, optimizer, epoch)
+        model=train(model, train_dataloader, loss_criterion, optimizer, epoch, hook)
     
-    '''
-    TODO: Test the model to see its accuracy
-    '''
-    test(model, test_dataloader, loss_criterion)
-    
+        '''
+        TODO: Test the model to see its accuracy
+        '''
+        test(model, test_dataloader, loss_criterion, hook)
+        
     '''
     TODO: Save the trained model
     '''
